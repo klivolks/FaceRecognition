@@ -1,7 +1,9 @@
+import dlib
 from PyQt6.QtCore import pyqtSignal, pyqtSlot, QThread
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QPushButton, QComboBox, QSlider
 from PyQt6.QtCore import Qt
+import face_recognition
 import cv2
 import mediapipe as mp
 import numpy as np
@@ -10,31 +12,73 @@ import numpy as np
 class CameraThread(QThread):
     changePixmap = pyqtSignal(QImage)
 
-    def __init__(self, camera, min_detection_confidence):
+    def __init__(self, camera, min_detection_confidence, mode='recognition', known_face_encoding=None):
         super(CameraThread, self).__init__()
         self.camera = camera
         self.min_detection_confidence = min_detection_confidence
         self.running = False
+        self.mode = mode
+        self.known_face_encoding = known_face_encoding
+        self.face_encoding = None
 
     def run(self):
         mp_drawing = mp.solutions.drawing_utils
-        mp_face_detection = mp.solutions.face_detection
+        mp_face_mesh = mp.solutions.face_mesh
+        drawing_spec = mp_drawing.DrawingSpec(thickness=1, circle_radius=1)
+        predictor = dlib.shape_predictor('shape_predictor_68_face_landmarks.dat')
+        face_recognition_model = dlib.face_recognition_model_v1('dlib_face_recognition_resnet_model_v1.dat')
 
         cap = cv2.VideoCapture(self.camera, cv2.CAP_ANY)
-        with mp_face_detection.FaceDetection(model_selection=1,
-                                             min_detection_confidence=self.min_detection_confidence) as face_detection:
+        with mp_face_mesh.FaceMesh(static_image_mode=False, max_num_faces=1,
+                                   min_detection_confidence=self.min_detection_confidence) as face_mesh:
             self.running = True
             while self.running and cap.isOpened():
                 ret, frame = cap.read()
                 if ret:
                     image = cv2.cvtColor(cv2.flip(frame, 1), cv2.COLOR_BGR2RGB)
                     image.flags.writeable = False
-                    results = face_detection.process(image)
+                    results = face_mesh.process(image)
                     image.flags.writeable = True
                     image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-                    if results.detections:
-                        for detection in results.detections:
-                            mp_drawing.draw_detection(image, detection)
+                    if results.multi_face_landmarks:
+                        for face_landmarks in results.multi_face_landmarks:
+                            mp_drawing.draw_landmarks(
+                                image=image,
+                                landmark_list=face_landmarks,
+                                connections=mp_face_mesh.FACEMESH_TESSELATION,
+                                landmark_drawing_spec=None,
+                                connection_drawing_spec=drawing_spec
+                            )
+                            # Resize frame of video to 1/4 size for faster face recognition processing
+                            small_frame = cv2.resize(image, (0, 0), fx=0.25, fy=0.25)
+
+                            # Detect the faces in the small frame
+                            face_locations = face_recognition.face_locations(small_frame)
+                            face_landmarks = []
+                            for (top, right, bottom, left) in face_locations:
+                                rect = dlib.rectangle(left, top, right, bottom)
+                                shape = predictor(small_frame, rect)
+                                face_landmarks.append(shape)
+
+                            # Now we will encode faces using face_landmarks instead of using face_recognition.face_encodings
+                            face_encodings = [np.array(face_recognition_model.compute_face_descriptor(small_frame, face_landmark, 1)) for face_landmark in face_landmarks]
+
+                            if self.mode == 'recognition' and self.known_face_encoding is not None and len(face_encodings) > 0:
+                                # See if the face is a match for the known face(s)
+                                matches = face_recognition.compare_faces([self.known_face_encoding], face_encodings[0])
+                                name = "Recognized" if True in matches else "Unknown"
+
+                                # Draw a box around the face
+                                cv2.rectangle(image, (left*4, top*4), (right*4, bottom*4), (0, 0, 255), 2)
+
+                                # Draw a label with a name below the face
+                                cv2.rectangle(image, (left*4, bottom*4 - 35), (right*4, bottom*4), (0, 0, 255), cv2.FILLED)
+                                font = cv2.FONT_HERSHEY_DUPLEX
+                                cv2.putText(image, name, (left*4 + 6, bottom*4 - 6), font, 1.0, (255, 255, 255), 1)
+
+                            elif self.mode == 'recording' and len(face_encodings) > 0:
+                                # For simplicity, consider only the first face detected
+                                self.face_encoding = face_encodings[0]
 
                     rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
                     h, w, ch = rgb_image.shape
@@ -67,6 +111,7 @@ class CameraSelector(QWidget):
         self.camera_thread = None
         self.init_ui()
         self.populate_camera_dropdown()
+        self.known_face_encoding = None
 
     def init_ui(self):
         self.setWindowTitle(self.title)
@@ -101,6 +146,15 @@ class CameraSelector(QWidget):
         self.layout.addWidget(self.stop_button)
         self.layout.addWidget(QLabel("Set Confidence %:"))
         self.layout.addWidget(self.slider)
+
+        self.record_button = QPushButton('Record Face')
+        self.record_button.clicked.connect(self.record_face)
+
+        self.recognize_button = QPushButton('Recognize Face')
+        self.recognize_button.clicked.connect(self.recognize_face)
+
+        self.layout.addWidget(self.record_button)
+        self.layout.addWidget(self.recognize_button)
 
         self.setLayout(self.layout)
 
@@ -145,6 +199,41 @@ class CameraSelector(QWidget):
         if self.camera_thread and self.camera_thread.isRunning():
             self.camera_thread.stop_camera()
             self.camera_thread.wait()
+
+    @pyqtSlot()
+    def record_face(self):
+        if self.camera_thread and self.camera_thread.isRunning():
+            self.camera_thread.stop_camera()
+            self.camera_thread = None
+
+        self.camera_thread = CameraThread(self.current_camera, self.min_detection_confidence, mode='recording')
+        self.camera_thread.changePixmap.connect(self.set_image)
+        self.camera_thread.finished.connect(self.face_recorded)
+        self.camera_thread.start()
+        self.cameraStarted.emit()
+
+    @pyqtSlot()
+    def face_recorded(self):
+        if self.camera_thread:
+            self.known_face_encoding = self.camera_thread.face_encoding
+        self.camera_thread = None
+
+    @pyqtSlot()
+    def recognize_face(self):
+        if self.known_face_encoding is None:
+            print("No face recorded yet")
+            return
+
+        if self.camera_thread and self.camera_thread.isRunning():
+            self.camera_thread.stop_camera()
+            self.camera_thread = None
+
+        self.camera_thread = CameraThread(self.current_camera, self.min_detection_confidence, mode='recognition',
+                                          known_face_encoding=self.known_face_encoding)
+        self.camera_thread.changePixmap.connect(self.set_image)
+        self.camera_thread.finished.connect(self.camera_stopped)
+        self.camera_thread.start()
+        self.cameraStarted.emit()
 
     def closeEvent(self, event):
         self.stop_camera()
