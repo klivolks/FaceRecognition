@@ -17,7 +17,7 @@ class CameraSelector(QWidget, RecordFace, RecognizeFace):
         self.top = 100
         self.width = 640
         self.height = 480
-        self.min_detection_confidence = 0.5
+        self.min_detection_confidence = 0.8
         self.current_camera = 0
         self.camera_thread = None
         self.init_ui()
@@ -27,7 +27,7 @@ class CameraSelector(QWidget, RecordFace, RecognizeFace):
     def init_ui(self):
         self.setWindowTitle(self.title)
         self.setGeometry(self.left, self.top, self.width, self.height)
-        self.resize(1000, 1000)
+        self.resize(640, 1000)
 
         self.layout = QVBoxLayout()
 

@@ -2,6 +2,7 @@ import cv2
 import face_recognition
 import dlib
 import mediapipe as mp
+import numpy
 import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QImage
@@ -20,8 +21,16 @@ class CameraThread(QThread):
         self.min_detection_confidence = min_detection_confidence
         self.running = False
         self.mode = mode
+        faces = collection('Faces')
+        results = faces.get({})
+
+        known_face_encodings = []
+        known_face_names = []
+        for result in results:
+            known_face_encodings.append(numpy.array(result['Face']))
+            known_face_names.append(result['Name'])
         self.known_face_encodings = known_face_encodings if known_face_encodings else []
-        self.known_face_names = []
+        self.known_face_names = known_face_names
         self.face_encoding = None
         self.username = None
 
@@ -69,13 +78,13 @@ class CameraThread(QThread):
         drawing_spec = mp_drawing.DrawingSpec(thickness=1, circle_radius=1)
 
         for face_landmarks in results.multi_face_landmarks:
-            mp_drawing.draw_landmarks(
-                image=image,
-                landmark_list=face_landmarks,
-                connections=mp_face_mesh.FACEMESH_TESSELATION,
-                landmark_drawing_spec=None,
-                connection_drawing_spec=drawing_spec
-            )
+            # mp_drawing.draw_landmarks(
+            #     image=image,
+            #     landmark_list=face_landmarks,
+            #     connections=mp_face_mesh.FACEMESH_TESSELATION,
+            #     landmark_drawing_spec=None,
+            #     connection_drawing_spec=drawing_spec
+            # )
 
             small_frame = cv2.resize(image, (0, 0), fx=0.25, fy=0.25)
             face_locations = face_recognition.face_locations(small_frame)
@@ -90,26 +99,22 @@ class CameraThread(QThread):
                 self.record_face(face_encodings)
 
     def recognize_face(self, image, face_encodings, face_locations):
-        # Compare each face in frame to known faces
         for (top, right, bottom, left), face_encoding in zip(face_locations, face_encodings):
-            matches = face_recognition.compare_faces(self.known_face_encodings, face_encoding)
-            count_true = sum(matches)  # Sums up all True values (as 1 each)
-            count_false = len(matches) - count_true  # Subtracts sum of True from total length
+            # Use face_distance instead of compare_faces
+            face_distances = face_recognition.face_distance(self.known_face_encodings, face_encoding)
 
-            print(f"Total: {len(matches)}, Match: {count_true}, No Match: {count_false}")
-            if False in matches:
-                wrong = matches.index(False)
-                print(f"Not face: {self.known_face_names[wrong]}")
-            name = "Unknown"
+            # Only consider it a match if the distance is below a certain threshold (e.g., 0.6)
+            best_match_index = np.argmin(face_distances)
+            print(face_distances[best_match_index])
+            if face_distances[best_match_index] < 0.4:
+                name = f"{self.known_face_names[best_match_index]}"
+            else:
+                name = "Unknown"
 
-            # Find the best match
-            if True in matches:
-                match_index = matches.index(True)
-                name = f"Recognized: {self.known_face_names[match_index]}"
 
             # Draw a box around the face and a label with a name below the face
-            cv2.rectangle(image, (left * 4, top * 4), (right * 4, bottom * 4), (0, 0, 255), 2)
-            cv2.rectangle(image, (left * 4, bottom * 4 - 35), (right * 4, bottom * 4), (0, 0, 255), cv2.FILLED)
+            cv2.rectangle(image, (left * 4, top * 4), (right * 4, bottom * 4), (96, 133, 29), 2)
+            cv2.rectangle(image, (left * 4, bottom * 4 - 35), (right * 4, bottom * 4), (96, 133, 29), cv2.FILLED)
             cv2.putText(image, name, (left * 4 + 6, bottom * 4 - 6), cv2.FONT_HERSHEY_DUPLEX, 1.0, (255, 255, 255), 1)
 
     def record_face(self, face_encodings):
