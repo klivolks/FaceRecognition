@@ -33,6 +33,8 @@ class CameraThread(QThread):
         self.known_face_names = known_face_names
         self.face_encoding = None
         self.username = None
+        self.recognized_names = []
+        self.prev_face_distance = float('inf')
 
     def run(self):
         # Instantiate the necessary components for the camera thread
@@ -103,19 +105,38 @@ class CameraThread(QThread):
             # Use face_distance instead of compare_faces
             face_distances = face_recognition.face_distance(self.known_face_encodings, face_encoding)
 
-            # Only consider it a match if the distance is below a certain threshold (e.g., 0.6)
+            # Only consider it a match if the distance is below a certain threshold (e.g., 0.4)
             best_match_index = np.argmin(face_distances)
-            print(face_distances[best_match_index])
-            if face_distances[best_match_index] < 0.4:
+            current_face_distance = face_distances[best_match_index]
+            if current_face_distance < 0.4:
                 name = f"{self.known_face_names[best_match_index]}"
+                if abs(current_face_distance - self.prev_face_distance) > 0.1:
+                    # Reset the recognized names for new face
+                    self.recognized_names = []
+                self.recognized_names.append(name)
+                most_common_name = max(set(self.recognized_names), key=self.recognized_names.count)
+                name = most_common_name
             else:
                 name = "Unknown"
+                self.recognized_names = []
 
+            self.prev_face_distance = current_face_distance
+
+            # Calculate the dimensions of the face rectangle
+            face_width = right - left
+            face_height = bottom - top
+
+            # Calculate 50% of the face width and height
+            width_increase = int(face_width * 0.25)
+            height_increase = int(face_height * 0.25)
 
             # Draw a box around the face and a label with a name below the face
-            cv2.rectangle(image, (left * 4, top * 4), (right * 4, bottom * 4), (96, 133, 29), 2)
-            cv2.rectangle(image, (left * 4, bottom * 4 - 35), (right * 4, bottom * 4), (96, 133, 29), cv2.FILLED)
-            cv2.putText(image, name, (left * 4 + 6, bottom * 4 - 6), cv2.FONT_HERSHEY_DUPLEX, 1.0, (255, 255, 255), 1)
+            cv2.rectangle(image, ((left - width_increase) * 4, (top - height_increase) * 4),
+                          ((right + width_increase) * 4, (bottom + height_increase) * 4), (96, 133, 29), 2)
+            cv2.rectangle(image, ((left - width_increase) * 4, (bottom + height_increase) * 4 - 35),
+                          ((right + width_increase) * 4, (bottom + height_increase) * 4), (96, 133, 29), cv2.FILLED)
+            cv2.putText(image, name, ((left - width_increase) * 4 + 6, (bottom + height_increase) * 4 - 6),
+                        cv2.FONT_HERSHEY_DUPLEX, 1.0, (255, 255, 255), 1)
 
     def record_face(self, face_encodings):
         self.face_encoding = face_encodings[0]  # Consider only the first face detected
