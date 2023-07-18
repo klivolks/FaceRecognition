@@ -1,5 +1,4 @@
 import cv2
-import dlib
 import mediapipe as mp
 import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal, pyqtSlot
@@ -22,13 +21,16 @@ class CameraThread(QThread):
         self.running = False
         self.mode = mode
         faces = collection('Faces')
-        results = faces.get({})
+        results = list(faces.get({}))  # Convert cursor to list to maintain order
 
         known_face_encodings = []
         known_face_names = []
+        known_face_ids = []
         for result in results:
             known_face_encodings.append(np.array(result['Face']))
             known_face_names.append(result['Name'])
+            known_face_ids.append(result['_id'])
+
         self.known_face_encodings = known_face_encodings if known_face_encodings else []
         self.known_face_names = known_face_names
         self.face_encoding = None
@@ -75,53 +77,64 @@ class CameraThread(QThread):
         drawing_spec = mp_drawing.DrawingSpec(thickness=1, circle_radius=1)
 
         for face_landmarks in results.multi_face_landmarks:
-            face_locations = [[landmark.x, landmark.y] for landmark in face_landmarks.landmark]
+            face_locations = [(landmark.x, landmark.y) for landmark in face_landmarks.landmark]
 
             # Face recognition with DeepFace
             face_embedding = DeepFace.represent(image, model_name='VGG-Face', enforce_detection=False)
 
             if self.mode == 'recognition' and self.known_face_encodings:
-                self.recognize_face(image, face_embedding, face_locations)
+                self.recognize_face(image, face_embedding[0], face_locations)
             elif self.mode == 'recording':
-                self.record_face(face_embedding)
+                self.record_face(face_embedding[0])
 
-    def recognize_face(self, image, face_embedding, face_locations):
-        min_distance = 10000  # initialize with a high number
+    def recognize_face(self, image, face_embedding_dict, face_locations):
+        max_similarity = -1
         name = "Unknown"
+
+        face_embedding = face_embedding_dict['embedding']
 
         for known_face_embedding, known_face_name in zip(self.known_face_encodings, self.known_face_names):
             distance = cosine_similarity([face_embedding], [known_face_embedding])
-
-            if distance < min_distance:
-                min_distance = distance
+            if distance[0][0] > max_similarity:
+                max_similarity = distance[0][0]
                 name = known_face_name
 
+        print(max_similarity, name)
         # If face is not close enough to any known faces, label as unknown
-        if min_distance > 0.4:
+        if max_similarity < 0.8:
             name = "Unknown"
 
-        # Calculate the dimensions of the face rectangle
-        for (top, right, bottom, left) in face_locations:
-            face_width = right - left
-            face_height = bottom - top
+        # Convert landmarks to pixel coordinates and calculate bounding box
+        pixel_landmarks = [(int(landmark[0] * image.shape[1]), int(landmark[1] * image.shape[0])) for landmark in
+                           face_locations]
+        left = min(landmark[0] for landmark in pixel_landmarks)
+        right = max(landmark[0] for landmark in pixel_landmarks)
+        top = min(landmark[1] for landmark in pixel_landmarks)
+        bottom = max(landmark[1] for landmark in pixel_landmarks)
 
-            # Calculate 50% of the face width and height
-            width_increase = int(face_width * 0.25)
-            height_increase = int(face_height * 0.25)
+        face_width = right - left
+        face_height = bottom - top
 
-            # Draw a box around the face and a label with a name below the face
-            cv2.rectangle(image, ((left - width_increase) * 4, (top - height_increase) * 4),
-                          ((right + width_increase) * 4, (bottom + height_increase) * 4), (96, 133, 29), 2)
-            cv2.rectangle(image, ((left - width_increase) * 4, (bottom + height_increase) * 4 - 35),
-                          ((right + width_increase) * 4, (bottom + height_increase) * 4), (96, 133, 29), cv2.FILLED)
-            cv2.putText(image, name, ((left - width_increase) * 4 + 6, (bottom + height_increase) * 4 - 6),
-                        cv2.FONT_HERSHEY_DUPLEX, 1.0, (255, 255, 255), 1)
+        # Calculate 10% of the face width and height
+        width_increase = int(face_width * 0.10)
+        height_increase = int(face_height * 0.10)
 
-    def record_face(self, face_embedding):
-        self.face_encoding = face_embedding
+        # Make sure rectangle coordinates don't go outside the image
+        left = max(0, left - width_increase)
+        right = min(image.shape[1], right + width_increase)
+        top = max(0, top - height_increase)
+        bottom = min(image.shape[0], bottom + height_increase)
+
+        # Draw a box around the face and a label with a name below the face
+        cv2.rectangle(image, (left, top), (right, bottom), (96, 133, 29), 2)
+        cv2.rectangle(image, (left, bottom - 35), (right, bottom), (96, 133, 29), cv2.FILLED)
+        cv2.putText(image, name, (left + 6, bottom - 6), cv2.FONT_HERSHEY_DUPLEX, 1.0, (255, 255, 255), 1)
+
+    def record_face(self, face_embedding_dict):
+        self.face_encoding = face_embedding_dict['embedding']
         faces = collection('Faces')
         data = {
-            "Face": self.face_encoding.tolist(),
+            "Face": self.face_encoding,
             "Name": self.username
         }
         faces.put(data)

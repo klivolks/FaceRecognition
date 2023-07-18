@@ -1,6 +1,6 @@
 from PyQt6.QtCore import pyqtSlot
 from PyQt6.QtWidgets import QInputDialog
-from camera import CameraThread
+from svm import CameraThread
 
 
 class RecordFace:

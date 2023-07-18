@@ -45,6 +45,12 @@ class CameraThread(QThread):
         face_recognition_model = dlib.face_recognition_model_v1('dlib_face_recognition_resnet_model_v1.dat')
 
         cap = cv2.VideoCapture(self.camera, cv2.CAP_ANY)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 920)
+        cap.set(cv2.CAP_PROP_BRIGHTNESS, 0.6)  # Adjust brightness (values can range from 0 to 1)
+        cap.set(cv2.CAP_PROP_CONTRAST, 0.6)  # Adjust contrast (values can range from 0 to 1)
+        cap.set(cv2.CAP_PROP_SATURATION, 0.6)  # Adjust saturation (values can range from 0 to 1)
+        cap.set(cv2.CAP_PROP_FPS, 60)
 
         # Start the face detection
         with mp_face_mesh.FaceMesh(static_image_mode=False, max_num_faces=1,
@@ -87,7 +93,6 @@ class CameraThread(QThread):
             #     landmark_drawing_spec=None,
             #     connection_drawing_spec=drawing_spec
             # )
-
             small_frame = cv2.resize(image, (0, 0), fx=0.25, fy=0.25)
             face_locations = face_recognition.face_locations(small_frame)
             face_landmarks = [predictor(small_frame, dlib.rectangle(*face)) for face in face_locations]
@@ -108,7 +113,8 @@ class CameraThread(QThread):
             # Only consider it a match if the distance is below a certain threshold (e.g., 0.4)
             best_match_index = np.argmin(face_distances)
             current_face_distance = face_distances[best_match_index]
-            if current_face_distance < 0.4:
+            print(current_face_distance)
+            if current_face_distance < 0.3:
                 name = f"{self.known_face_names[best_match_index]}"
                 if abs(current_face_distance - self.prev_face_distance) > 0.1:
                     # Reset the recognized names for new face
@@ -118,7 +124,7 @@ class CameraThread(QThread):
                 name = most_common_name
             else:
                 name = "Unknown"
-                self.recognized_names = []
+                # self.recognized_names = []
 
             self.prev_face_distance = current_face_distance
 

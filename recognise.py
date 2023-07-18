@@ -1,6 +1,6 @@
 import numpy
 from PyQt6.QtCore import pyqtSlot
-from camera import CameraThread
+from svm import CameraThread
 from daba.Mongo import collection
 
 

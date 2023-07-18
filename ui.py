@@ -2,7 +2,7 @@ import cv2
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QPushButton, QComboBox, QSlider
 from PyQt6.QtCore import Qt, pyqtSlot, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap
-from camera import CameraThread
+from svm import CameraThread
 from record import RecordFace
 from recognise import RecognizeFace
 
@@ -12,7 +12,7 @@ class CameraSelector(QWidget, RecordFace, RecognizeFace):
 
     def __init__(self):
         super().__init__()
-        self.title = 'Camera Selector'
+        self.title = 'Face Recognition AI © Vishnu Prakash'
         self.left = 100
         self.top = 100
         self.width = 640
