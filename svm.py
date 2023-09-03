@@ -6,6 +6,12 @@ from PyQt6.QtGui import QImage
 from PyQt6.QtCore import Qt
 from daba.Mongo import collection
 from sklearn.metrics.pairwise import cosine_similarity
+from scipy.spatial.transform import Rotation as R
+from sklearn import linear_model
+
+PITCH = 'pitch'
+ROLL = 'roll'
+YAW = 'yaw'
 
 
 class CameraThread(QThread):
@@ -15,6 +21,9 @@ class CameraThread(QThread):
         super().__init__()
 
         # Initialize instance variables
+        self.initial_source_points = None
+        self.affine_transform = None
+        self.target_points = np.zeros((468, 3))
         self.camera = camera
         self.min_detection_confidence = min_detection_confidence
         self.running = False
@@ -77,12 +86,86 @@ class CameraThread(QThread):
 
         for face_landmarks in results.multi_face_landmarks:
             face_locations = [(landmark.x, landmark.y, landmark.z) for landmark in face_landmarks.landmark]
-            face_embedding = np.asarray(face_locations).flatten()  # Convert to single numpy array
+
+            # Calculate pitch, roll, and yaw
+            pitch, yaw, roll = self.calculate_pitch_yaw_roll(face_locations)
+
+            self.target_points = np.array(face_locations)
+
+            # Estimate the affine transformation matrix for this face
+            self.affine_transform = self.estimate_affine_transform(np.array(face_locations), self.target_points)
+
+            # Apply rotation and affine transformation to normalize the pose
+            face_locations_transformed = self.apply_affine_transformation(face_locations, pitch, yaw, roll,
+                                                                          self.affine_transform)
+
+            face_embedding = np.asarray(face_locations_transformed).flatten()  # Convert to single numpy array
 
             if self.mode == 'recognition' and self.known_face_encodings:
                 self.recognize_face(image, face_embedding, face_locations)
             elif self.mode == 'recording':
                 self.record_face(face_embedding)
+
+    @staticmethod
+    def calculate_pitch_yaw_roll(face_landmarks):
+        # Convert the landmarks to a numpy array
+        landmarks_array = np.array(face_landmarks)
+
+        # Calculate the center of mass of the landmarks
+        center_of_mass = landmarks_array.mean(axis=0)
+
+        # Translate the landmarks to the origin
+        landmarks_centered = landmarks_array - center_of_mass
+
+        # Perform singular value decomposition on the covariance matrix of the centered landmarks
+        u, s, vh = np.linalg.svd(landmarks_centered)
+
+        # The columns of vh are the eigenvectors of the covariance matrix, so the rotation matrix is just vh
+        rotation_matrix = vh
+
+        # Convert the rotation matrix to Euler angles (pitch, yaw, roll)
+        rotation = R.from_matrix(rotation_matrix)
+        pitch, roll, yaw = rotation.as_euler('xyz', degrees=True)
+
+        return pitch, yaw, roll
+
+    @staticmethod
+    def apply_affine_transformation(face_landmarks, pitch, yaw, roll, affine_transform):
+        # Convert the landmarks to a numpy array
+        landmarks_array = np.array(face_landmarks)
+
+        # Create a rotation matrix from the Euler angles
+        rotation = R.from_euler('xyz', [pitch, roll, yaw], degrees=True)
+        rotation_matrix = rotation.as_matrix()
+
+        # Apply the rotation matrix to the landmarks
+        landmarks_rotated = np.dot(landmarks_array, rotation_matrix)
+
+        # Prepare for the affine transformation
+        landmarks_rotated = np.hstack(
+            [landmarks_rotated, np.ones((landmarks_rotated.shape[0], 1))])  # append ones column
+
+        # Apply the affine transformation
+        landmarks_transformed = np.dot(landmarks_rotated, affine_transform.T)
+
+        return landmarks_transformed
+
+    @staticmethod
+    def estimate_affine_transform(points_source, points_target):
+        """
+        Estimate affine transform from source points to target points.
+        """
+        # Check the shape of points_target as well
+        assert points_target.shape[1] == 3, "points_target must have 3 columns"
+        points_target = np.array(points_target)
+
+        # Estimate affine transform
+        model = linear_model.LinearRegression().fit(points_source[:, :3],
+                                                    points_target)  # Use only the first three columns
+
+        affine_transform = np.hstack([model.coef_, model.intercept_.reshape(-1, 1)])
+
+        return affine_transform
 
     def recognize_face(self, image, face_embedding, face_locations):
         max_similarity = -1
